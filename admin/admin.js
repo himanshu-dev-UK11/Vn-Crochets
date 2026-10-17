@@ -110,13 +110,14 @@ async function api(path, {method = 'GET', body, auth = true} = {}) {
 
   if (res.status === 401 && auth) {
     const wasInDesk = !!$('#nav');
+    const msg = data && data.error ? data.error : 'Your session has ended. Please sign in again.';
     clearToken();
     if (wasInDesk) {
-      showLogin('Your session has ended. Please sign in again.');
+      showLogin(msg);
     } else {
       showLogin();
     }
-    throw new Error('Sign in again to continue.');
+    throw new Error(msg);
   }
   if (!res.ok) {
     const err = new Error((data && data.error) || `Request failed (${res.status}).`);

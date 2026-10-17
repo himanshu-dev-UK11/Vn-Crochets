@@ -20,7 +20,10 @@ function readJson(req) {
 
 function requireAdmin(context, req) {
   if (isAdmin(req.headers)) return true;
-  send(context, 401, {error: 'Your session has ended. Sign in again.'});
+  const hasToken = !!((req.headers && (req.headers.authorization || req.headers.Authorization)) || '');
+  send(context, 401, {
+    error: hasToken ? 'Your session has ended. Sign in again.' : 'Authentication is required for this action.'
+  });
   return false;
 }
 

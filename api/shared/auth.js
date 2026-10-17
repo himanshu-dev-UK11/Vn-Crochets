@@ -11,14 +11,22 @@ function httpError(status, message) {
 
 function secret() {
   const s = process.env.JWT_SECRET;
-  if (!s || s.length < 32) throw httpError(500, 'The server is missing JWT_SECRET (needs 32+ characters).');
+  if (!s || s.length < 32) {
+    const err = httpError(500, 'The server is missing JWT_SECRET or it is too short (needs 32+ characters).');
+    console.error('[AUTH_ERROR] JWT_SECRET configuration issue.');
+    throw err;
+  }
   return s;
 }
 
 function adminConfig() {
   const user = process.env.ADMIN_USERNAME;
   const pass = process.env.ADMIN_PASSWORD;
-  if (!user || !pass) throw httpError(500, 'The server is missing ADMIN_USERNAME or ADMIN_PASSWORD.');
+  if (!user || !pass) {
+    const err = httpError(500, 'The server is missing ADMIN_USERNAME or ADMIN_PASSWORD configuration.');
+    console.error('[AUTH_ERROR] Admin credentials missing in environment.');
+    throw err;
+  }
   return {user: user.trim().toLowerCase(), pass};
 }
 
