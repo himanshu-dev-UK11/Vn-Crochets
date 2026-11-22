@@ -1,13 +1,24 @@
+# dependencies & environments
 node_modules/
+.venv/
+__pycache__/
+
+# secrets & local config
 .env
 .env.*
 !.env.example
 api/local.settings.json
 
-# local-only data
+# local-only data & uploads
 data/orders.local.json
+uploads/
 *.tmp
 *.zip
+*.log
 
-# editor / sandbox leftovers
+# OS & editor leftovers
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
 .fuse_hidden*
