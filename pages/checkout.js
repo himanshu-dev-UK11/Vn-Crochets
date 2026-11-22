@@ -1,9 +1,9 @@
 import {PRODUCTS, SETTINGS, initCatalog, waLink} from '../js/data.js';
 import {loadState, saveState, subtotal, pruneCart} from '../js/store.js';
-
+import {isCloudEnabled, cloudCreateOrder} from '../js/cloud.js';
 
 const state = loadState();
-const money = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+const money = (n) => (SETTINGS.currency || '₹') + Math.round(n).toLocaleString('en-IN');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
 ));
@@ -14,6 +14,17 @@ const status = document.querySelector('#status');
 const form = document.querySelector('#form');
 const submit = form.querySelector('button[type="submit"]');
 
+function syncBrandAndTheme() {
+  if (SETTINGS.brandName) {
+    document.querySelectorAll('[data-brand]').forEach((el) => { el.textContent = SETTINGS.brandName; });
+    document.title = `Checkout | ${SETTINGS.brandName}`;
+  }
+  if (SETTINGS.accent && /^#[0-9a-f]{6}$/i.test(SETTINGS.accent)) {
+    document.documentElement.style.setProperty('--rose', SETTINGS.accent);
+  }
+  document.querySelectorAll('a[href^="https://wa.me/"]').forEach((a) => { a.href = waLink(); });
+}
+
 /* ── Summary ───────────────────────────────────────────────── */
 
 function currentTotals() {
@@ -23,6 +34,7 @@ function currentTotals() {
 }
 
 function render() {
+  syncBrandAndTheme();
   pruneCart(state, PRODUCTS);
   const {sum, shipping, grand} = currentTotals();
 
@@ -47,12 +59,13 @@ function render() {
     const p = PRODUCTS.find((x) => String(x.id) === String(line.id));
     if (!p) return '';
     const bg = /^#[0-9a-f]{3,8}$/i.test(p.bg || '') ? p.bg : 'var(--linen)';
+    const fallbackEmoji = `<span class="card-emoji" aria-hidden="true">${esc(p.e || '🧶')}</span>`;
     const art = p.image
-      ? `<img src="${esc(p.image)}" alt="${esc(p.n)}" loading="lazy">`
-      : `<span class="card-emoji">${esc(p.e || '🧶')}</span>`;
+      ? `<img src="${esc(p.image)}" alt="${esc(p.n)}" loading="lazy" onerror="this.closest('.art-box')?.classList.add('tex','is-fallback');this.remove();">${fallbackEmoji}`
+      : fallbackEmoji;
     return `
       <article class="co-item">
-        <div class="crow-art" style="background-color:${bg}">${art}</div>
+        <div class="crow-art art-box${p.image ? '' : ' tex is-fallback'}" style="background-color:${bg}">${art}</div>
         <div class="co-copy">
           <h3>${esc(p.n)}</h3>
           <p>${[line.c ? `${esc(line.c)} ribbon` : '', esc(p.s || '')].filter(Boolean).join(' · ')}</p>
@@ -98,7 +111,8 @@ function clearErrors() {
 
 function waUrl({name, email, phone, city, notes, ref}) {
   const {sum, shipping, grand} = currentTotals();
-  const lines = ['New order — VN crochet', ''];
+  const brand = SETTINGS.brandName || 'VN crochet';
+  const lines = [`New order — ${brand}`, ''];
   if (ref) lines.push(`Ref: ${ref}`, '');
   lines.push(`Name: ${name}`, `Email: ${email}`, `Phone: ${phone}`, `City: ${city}`, '', 'Items:');
   state.cart.forEach((line) => {
@@ -144,31 +158,36 @@ form.addEventListener('submit', async (event) => {
   let ref = null;
   let orderTotal = grand;
 
-  // Shape expected by api/orders: {name, phone, items, total}.
   const items = state.cart.map((line) => {
     const p = PRODUCTS.find((x) => String(x.id) === String(line.id));
     return {id: line.id, name: p?.n || '', ribbon: line.c, qty: line.q, price: p?.p || 0};
   });
 
   try {
-    const res = await fetch('/api/orders', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, email, phone, city, notes, items, total: orderTotal})
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      submit.disabled = false;
-      submit.textContent = 'Place the order';
-      status.textContent = data.error || "We couldn't save that order. Please try again in a moment.";
-      status.classList.add('err');
-      return;
+    if (isCloudEnabled()) {
+      const saved = await cloudCreateOrder({name, email, phone, city, notes, items, total: orderTotal});
+      if (saved.orderId) ref = saved.orderId;
+      if (Number.isFinite(Number(saved.total))) orderTotal = Number(saved.total);
+    } else {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, email, phone, city, notes, items, total: orderTotal})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.orderId) ref = data.orderId;
+        if (Number.isFinite(Number(data.total))) orderTotal = Number(data.total);
+      } else if (res.status < 500 && res.status !== 404 && res.status !== 405) {
+        submit.disabled = false;
+        submit.textContent = 'Place the order';
+        status.textContent = data.error || "We couldn't save that order. Please try again in a moment.";
+        status.classList.add('err');
+        return;
+      }
     }
-    if (data.orderId) ref = data.orderId;
-    if (Number.isFinite(Number(data.total))) orderTotal = Number(data.total); // server-checked prices
   } catch {
-    // The order API is unreachable — still hand the order over on WhatsApp
-    // rather than losing it. The maker confirms there either way.
+    // Still hand the order over on WhatsApp so no customer order is ever lost.
   }
 
   const url = waUrl({name, email, phone, city, notes, ref});
@@ -191,6 +210,7 @@ form.addEventListener('submit', async (event) => {
 
 /* ── Boot ──────────────────────────────────────────────────── */
 
+syncBrandAndTheme();
 initCatalog().then(render).catch(() => {
   list.innerHTML = `
     <div class="empty">

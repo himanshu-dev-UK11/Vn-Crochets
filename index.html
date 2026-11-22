@@ -14,7 +14,7 @@
 <meta property="og:url" content="https://vncrochet.com/">
 <meta property="og:title" content="VN crochet — Handmade crochet plushies, botanicals &amp; charms">
 <meta property="og:description" content="A one-person crochet studio in India. Small-batch plushies, tiny botanicals and pocket charms — or send an idea and we'll make it.">
-<meta property="og:image" content="https://vncrochet.com/og-image.png">
+<meta property="og:image" content="https://vncrochet.com/og-image.svg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:locale" content="en_IN">
@@ -22,12 +22,12 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="VN crochet — Handmade crochet plushies, botanicals &amp; charms">
 <meta name="twitter:description" content="A one-person crochet studio in India. Small-batch plushies, botanicals and pocket charms.">
-<meta name="twitter:image" content="https://vncrochet.com/og-image.png">
+<meta name="twitter:image" content="https://vncrochet.com/og-image.svg">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500..700&family=Karla:wght@400..700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=7">
+<link rel="stylesheet" href="css/styles.css?v=9">
 </head>
 <body>
 
@@ -69,6 +69,7 @@
     </div>
     <div class="hero-frame">
       <img id="heroImg" src="images/product-sample.webp" alt="A crochet chick plush with a violet bow resting on a warm studio table" width="800" height="800" fetchpriority="high">
+      <div class="hero-fallback" aria-hidden="true"><span>🧶</span></div>
       <span class="hero-cap" id="heroCap"><span aria-hidden="true">🧵</span><span>Cotton yarn, hand-stitched details</span></span>
     </div>
   </section>
@@ -193,10 +194,11 @@
         <a href="#shop">Shop</a>
         <a href="#custom">Custom orders</a>
         <a href="#about">About</a>
+        <a id="igLink" href="#" target="_blank" rel="noopener" hidden>Instagram</a>
         <a href="https://wa.me/918923646175" target="_blank" rel="noopener">WhatsApp</a>
       </div>
     </div>
-    <p class="foot-fine">© <span id="yr">2026</span> VN crochet · Handmade in India</p>
+    <p class="foot-fine">© <span id="yr">2026</span> <span data-brand>VN crochet</span> · Handmade in India</p>
   </div>
 </footer>
 
@@ -204,6 +206,6 @@
 <dialog id="cart" aria-label="Your cart"><div class="cart-panel" id="cartPanel"></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script type="module" src="js/app.js?v=7"></script>
+<script type="module" src="js/app.js?v=9"></script>
 </body>
 </html>

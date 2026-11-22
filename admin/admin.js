@@ -5,9 +5,24 @@
 // behaves identically on localhost and on the live site.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import {
+  isCloudEnabled,
+  isCloudinaryEnabled,
+  cloudHasSession,
+  cloudSignIn,
+  cloudSignOut,
+  cloudFetchStore,
+  cloudSaveStore,
+  cloudListOrders,
+  cloudUpdateOrderStatus,
+  cloudinaryUpload
+} from '../js/cloud.js';
+
 const API = '/api';
 const TOKEN_KEY = 'vnc.admin.token';
 const CRED_KEY = 'vnc.admin.cred';
+const CLOUD = isCloudEnabled();
+const CLOUDINARY = isCloudinaryEnabled();
 
 // ── Session ──────────────────────────────────────────────────────────────────
 // "Remember me" keeps the token in localStorage so the browser can reopen the
@@ -15,6 +30,7 @@ const CRED_KEY = 'vnc.admin.cred';
 // the tab. Credentials are only stored when the maker ticks the box.
 
 function getToken() {
+  if (CLOUD) return cloudHasSession() ? 'cloud' : '';
   try {
     const t = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
     if (t === 'null' || t === 'undefined' || t.length < 10) return '';
@@ -31,6 +47,7 @@ function setToken(token, persistent) {
   } catch { /* private mode — the session still works without storage */ }
 }
 function clearToken() {
+  cloudSignOut();
   try {
     localStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(TOKEN_KEY);
@@ -117,7 +134,9 @@ async function api(path, {method = 'GET', body, auth = true} = {}) {
     } else {
       showLogin();
     }
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = 401;
+    throw err;
   }
   if (!res.ok) {
     const err = new Error((data && data.error) || `Request failed (${res.status}).`);
@@ -139,13 +158,15 @@ function showLogin(message = '') {
           <div><strong class="js-brand">VN crochet</strong><small>Studio desk</small></div>
         </div>
         <h1>Sign in</h1>
-        <p class="login-sub">Your shop, your shelf. Everything you publish here goes live on the storefront.</p>
+        <p class="login-sub">${CLOUD
+          ? 'Cloud Studio Desk (Supabase + Cloudinary). Edits made here go live immediately on your storefront.'
+          : 'Your shop, your shelf. Everything you publish here goes live on the storefront.'}</p>
         <p class="login-error" id="loginErr" role="alert"${message ? '' : ' hidden'}>${esc(message)}</p>
         <form id="loginForm" autocomplete="on">
           <label>
-            <span>Username</span>
-            <input id="loginUser" name="username" type="text" autocomplete="username"
-                   autocapitalize="none" spellcheck="false" required placeholder="your username"
+            <span>${CLOUD ? 'Admin email' : 'Username'}</span>
+            <input id="loginUser" name="username" type="${CLOUD ? 'email' : 'text'}" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" required placeholder="${CLOUD ? 'you@example.com' : 'your username'}"
                    value="${cred ? esc(cred.username) : ''}">
           </label>
           <label>
@@ -208,15 +229,18 @@ function showLogin(message = '') {
     btn.textContent = 'Signing in…';
 
     try {
-      const res = await fetch(`${API}/login`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username, password, remember})
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'That username and password don’t match.');
-
-      setToken(data.token, remember);
+      if (CLOUD) {
+        await cloudSignIn(username, password, remember);
+      } else {
+        const res = await fetch(`${API}/login`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({username, password, remember})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'That username and password don’t match.');
+        setToken(data.token, remember);
+      }
       if (remember) saveCred(username, password); else forgetCred();
       boot();
     } catch (err) {
@@ -242,7 +266,8 @@ const store = {
   etag: null,
   orders: [],
   reachable: true,
-  notice: ''
+  notice: '',
+  needsInitialPublish: false
 };
 
 const SETTINGS_DEFAULTS = {
@@ -293,27 +318,25 @@ async function starterCatalogue() {
 
 async function loadStore() {
   store.notice = '';
+  store.needsInitialPublish = false;
   try {
-    const data = await api('/catalog?all=1');
-    store.products = Array.isArray(data.products) ? data.products : [];
-    store.settings = data.settings || null;
-    store.etag = data.etag || null;
+    const data = CLOUD ? await cloudFetchStore() : await api('/catalog?all=1');
+    store.products = Array.isArray(data?.products) ? data.products : [];
+    store.settings = data?.settings || null;
+    store.etag = data?.etag || null;
     store.reachable = true;
   } catch (err) {
-    // A 401 has already shown the sign-in screen — that IS the handling.
-    if (err.status === 401 || err.message === 'Sign in again to continue.') throw err;
+    // Only redirect to sign-in on an actual auth/session failure.
+    if (err.status === 401 && (!CLOUD || err.authError)) throw err;
 
-    // 404 here means "nothing published yet", not a broken shop: either the
-    // storage document does not exist, or the token was not accepted and the
-    // server answered as if a shopper asked. Both are fixed by starting from
-    // the starter catalogue and publishing it.
+    // 404 here means "nothing published yet", not a broken shop.
     const firstRun = err.status === 404;
     if (!firstRun) {
       store.reachable = false;
       store.products = [];
       store.settings = null;
       store.etag = null;
-      store.notice = err.message;
+      store.notice = err.message || 'Could not reach the shop database.';
       return;
     }
     store.reachable = true;
@@ -322,11 +345,12 @@ async function loadStore() {
     store.etag = null;
   }
 
-  if (!store.products.length && !store.settings) {
+  if (store.reachable && !store.products.length) {
     const seed = await starterCatalogue();
     if (seed.length) {
       store.products = seed;
-      store.notice = 'Your shop has no products saved online yet. This is the starter catalogue — press “Publish to shop” to make it live, or add your own products.';
+      store.needsInitialPublish = true;
+      store.notice = `Loaded ${seed.length} starter products from your website. Click “Publish to shop” once to sync them to your live cloud database.`;
     }
   }
 }
@@ -334,15 +358,23 @@ async function loadStore() {
 async function saveStore(successMessage) {
   const payload = {products: store.products, settings: settings(), etag: store.etag};
   try {
-    const data = await api('/catalog', {method: 'POST', body: payload});
+    const data = CLOUD
+      ? await cloudSaveStore(payload.products, payload.settings)
+      : await api('/catalog', {method: 'POST', body: payload});
     store.products = Array.isArray(data.products) ? data.products : store.products;
     store.settings = data.settings || store.settings;
     store.etag = data.etag || store.etag;
     store.reachable = true;
     store.notice = '';
+    store.needsInitialPublish = false;
     if (successMessage) toast(successMessage, 'ok');
     return true;
   } catch (err) {
+    if (err.status === 401) {
+      clearToken();
+      showLogin(err.message || 'Your session has ended. Please sign in again.');
+      throw err;
+    }
     if (err.message.startsWith('The shop was changed')) {
       toast('Another tab saved changes. Reloading the latest version…', 'err');
       await loadStore();
@@ -477,7 +509,7 @@ function renderView() {
         <span class="mark" aria-hidden="true">⚠</span>
         <h3>The desk can’t reach the shop yet</h3>
         <p>${esc(store.notice || 'The server did not answer.')}</p>
-        <p class="section-note">If this is the live site, add <b>STORAGE_CONNECTION_STRING</b>, <b>ADMIN_USERNAME</b>, <b>ADMIN_PASSWORD</b> and <b>JWT_SECRET</b> in Azure → Configuration, then reload.</p>
+        <p class="section-note">If you are running locally, start the site with <b>Open Website.bat</b> (or <code>npm start</code>) and reload. On live hosting, make sure your API environment variables are set.</p>
         <button class="primary" id="retryBtn" type="button">Try again</button>
       </div></div>`;
     $('#retryBtn').addEventListener('click', async () => {
@@ -491,14 +523,14 @@ function renderView() {
 // ── Overview ─────────────────────────────────────────────────────────────────
 function viewOverview(host) {
   const live = store.products.filter((p) => p.active !== false);
-  const drafts = store.products.length - live;
+  const drafts = store.products.length - live.length;
   const outOfStock = live.filter((p) => Number(p.stock) <= 0);
   const value = live.reduce((sum, p) => sum + Number(p.p || 0) * Math.max(0, Number(p.stock) || 0), 0);
   const recent = [...live].slice(-6).reverse();
   const s = settings();
 
   host.innerHTML = `
-    ${store.notice ? `<div class="card"><div class="card-body"><p class="status err">${esc(store.notice)}</p></div></div>` : ''}
+    ${store.notice ? `<div class="card"><div class="card-body" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><p class="status ${store.needsInitialPublish ? '' : 'err'}" style="margin:0">${esc(store.notice)}</p>${store.needsInitialPublish ? '<button class="primary small" id="ovSyncNow" type="button">Publish to shop now</button>' : ''}</div></div>` : ''}
     <div class="stats">
       <div class="stat"><b>${live.length}</b><span>Live on the shop</span></div>
       <div class="stat ${drafts ? 'warn' : ''}"><b>${drafts}</b><span>Drafts</span></div>
@@ -530,11 +562,18 @@ function viewOverview(host) {
   $('#ovAdd').addEventListener('click', () => { editing = blankProduct(); go('editor'); });
   $('#ovAppearance').addEventListener('click', () => go('appearance'));
   $('#ovAll').addEventListener('click', () => go('products'));
-  $('#ovPublish').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    try { await saveStore('Your shelf is live on the shop.'); }
-    finally { e.target.disabled = false; }
-  });
+  const doPublish = async (btn) => {
+    btn.disabled = true;
+    try {
+      await saveStore('Your shelf is live on the shop.');
+      renderNav();
+      renderView();
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  $('#ovPublish').addEventListener('click', (e) => doPublish(e.currentTarget));
+  $('#ovSyncNow')?.addEventListener('click', (e) => doPublish(e.currentTarget));
   wireRows(host);
 }
 
@@ -624,27 +663,30 @@ function viewProducts(host) {
 
 // ── Product editor ───────────────────────────────────────────────────────────
 function blankProduct() {
+  editorState.pendingImage = null;
+  editorState.pendingVideo = null;
   return {
     id: 0, n: '', e: '🧶', c: settings().categories[0]?.name || 'Plush', p: 0, lv: 1,
     bg: '#f5eadf', s: '', m: [], d: '', care: '', stock: 1,
-    featured: false, active: true, image: '', imageX: 50, imageY: 50, imageZoom: 100,
+    featured: false, active: true, image: '', video: '', imageX: 50, imageY: 50, imageZoom: 100,
     ribbons: settings().ribbonColors.map((_, i) => i)
   };
 }
 
 function openEditor(id) {
+  editorState.pendingImage = null;
+  editorState.pendingVideo = null;
   const found = store.products.find((p) => String(p.id) === String(id));
   editing = found ? structuredClone(found) : blankProduct();
   go('editor');
 }
 
-const editorState = {pendingImage: null, draft: null};
+const editorState = {pendingImage: null, pendingVideo: null, draft: null};
 
 function viewEditor(host) {
   const p = editing || (editing = blankProduct());
   const s = settings();
   const isNew = !p.id;
-  delete editorState.pendingImage;
 
   host.innerHTML = `
     <div class="card">
@@ -688,17 +730,20 @@ function viewEditor(host) {
           </fieldset>
 
           <fieldset>
-            <legend>Photo</legend>
+            <legend>Photo &amp; video</legend>
             <div class="uploader">
               <div class="drop${p.image ? ' has-image' : ''}" id="drop" role="button" tabindex="0" aria-label="Choose a product photo">
                 ${p.image
                   ? `<img class="preview" id="dropImg" src="${esc(p.image)}" alt="">`
                   : `<div class="drop-inner"><span class="drop-icon" aria-hidden="true">🖼️</span>
                      <span class="drop-text">Click or drop a photo here</span>
-                     <span class="drop-sub">JPG, PNG or WebP · up to 4 MB</span></div>`}
-                ${p.image ? `<div class="thumb-bar"><span id="fileName">${esc(p.image.startsWith('data:') ? 'New photo' : p.image.split('/').pop())}</span>
+                     <span class="drop-sub">${CLOUDINARY ? 'JPG, PNG or WebP · uploads directly to Cloudinary (up to 10 MB)' : 'JPG, PNG or WebP · up to 5 MB'}</span></div>`}
+                ${p.image ? `<div class="thumb-bar"><span id="fileName">${esc(p.image.startsWith('data:') ? 'New photo (unsaved)' : p.image.split('/').pop())}</span>
                    <button type="button" id="clearImg" aria-label="Remove photo">✕</button></div>` : ''}
               </div>
+              <label>Or paste a hosted photo URL <span class="field-hint">Cloudinary, Supabase, or /images/... path</span>
+                <input id="fImageUrl" type="text" maxlength="500" value="${esc(p.image && !p.image.startsWith('data:') ? p.image : '')}" placeholder="https://res.cloudinary.com/... or /images/item.webp">
+              </label>
               <div class="focus-edit" id="focusEdit"${p.image ? '' : ' hidden'}>
                 <div class="focus-stage" id="focusStage" role="application" aria-label="Drag to reposition the photo"></div>
                 <div class="focus-controls">
@@ -710,6 +755,16 @@ function viewEditor(host) {
                   <button class="ghost small" id="resetFocus" type="button">Centre & reset zoom</button>
                 </div>
               </div>
+              <div class="grid-2" style="align-items:end">
+                <label>Product video URL <span class="field-hint">optional — MP4/WebM link or upload</span>
+                  <input id="fVideoUrl" type="text" maxlength="500" value="${esc(p.video || '')}" placeholder="https://res.cloudinary.com/.../clip.mp4">
+                </label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <button class="ghost" id="pickVideoBtn" type="button">Upload MP4 / WebM</button>
+                  ${p.video ? '<button class="ghost small danger" id="clearVideoBtn" type="button">Remove</button>' : ''}
+                </div>
+              </div>
+              ${editorState.pendingVideo ? `<span class="field-hint">Video selected: ${esc(editorState.pendingVideo.name)} — click Save to upload.</span>` : ''}
             </div>
           </fieldset>
 
@@ -798,6 +853,8 @@ function viewEditor(host) {
       featured: $('#fFeatured').checked,
       active: $('#fActive').checked,
       ribbons: $$('[data-ribbon]').filter((cb) => cb.checked).map((cb) => Number(cb.dataset.ribbon)),
+      image: editorState.pendingImage ? p.image : ($('#fImageUrl')?.value.trim() || p.image || ''),
+      video: $('#fVideoUrl')?.value.trim() || '',
       imageX: Number(p.imageX) || 50,
       imageY: Number(p.imageY) || 50,
       imageZoom: Number(p.imageZoom) || 100
@@ -807,7 +864,7 @@ function viewEditor(host) {
   const paintMini = () => {
     const d = state();
     const art = d.image
-      ? `<div class="mini-art" style="background-color:${esc(d.bg)};background-image:url('${esc(d.image)}');background-position:${d.imageX}% ${d.imageY}%;background-size:${d.imageZoom}%"></div>`
+      ? `<div class="mini-art" style="background-color:${esc(d.bg)}"><img src="${esc(d.image)}" alt="" style="object-position:${d.imageX}% ${d.imageY}%;transform-origin:${d.imageX}% ${d.imageY}%;transform:scale(${d.imageZoom / 100})"></div>`
       : `<div class="mini-art" style="background-color:${esc(d.bg)}">${esc(d.e || '🧶')}</div>`;
     $('#miniCard').innerHTML = `${art}
       <div class="mini-body">
@@ -878,12 +935,14 @@ function viewEditor(host) {
       toast('Use a JPG, PNG or WebP photo.', 'err');
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
-      toast('That photo is larger than 4 MB. Try a smaller one.', 'err');
+    const maxImgBytes = CLOUDINARY ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (file.size > maxImgBytes) {
+      toast(`That photo is larger than ${CLOUDINARY ? '10' : '5'} MB. Try a smaller one.`, 'err');
       return;
     }
     const reader = new FileReader();
     reader.addEventListener('load', () => {
+      Object.assign(p, state());
       editorState.pendingImage = file;
       p.image = String(reader.result);
       p.imageX = 50; p.imageY = 50; p.imageZoom = 100;
@@ -893,6 +952,45 @@ function viewEditor(host) {
     reader.readAsDataURL(file);
   }
 
+  $('#fImageUrl')?.addEventListener('change', () => {
+    const url = $('#fImageUrl').value.trim();
+    Object.assign(p, state());
+    editorState.pendingImage = null;
+    p.image = url;
+    viewEditor(host);
+  });
+
+  $('#pickVideoBtn')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'video/mp4,video/webm';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (!['video/mp4', 'video/webm'].includes(file.type)) {
+        toast('Use an MP4 or WebM video.', 'err');
+        return;
+      }
+      const maxVidBytes = CLOUDINARY ? 95 * 1024 * 1024 : 25 * 1024 * 1024;
+      if (file.size > maxVidBytes) {
+        toast(`That video is larger than ${CLOUDINARY ? '95' : '25'} MB. Try a shorter clip.`, 'err');
+        return;
+      }
+      Object.assign(p, state());
+      editorState.pendingVideo = file;
+      viewEditor(host);
+      $('#saveStatus').textContent = 'Video ready — save to upload it.';
+    });
+    input.click();
+  });
+
+  $('#clearVideoBtn')?.addEventListener('click', () => {
+    Object.assign(p, state());
+    p.video = '';
+    editorState.pendingVideo = null;
+    viewEditor(host);
+  });
+
   drop.addEventListener('click', (e) => { if (e.target.id !== 'clearImg') pick(); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
@@ -900,6 +998,7 @@ function viewEditor(host) {
   drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); takeFile(e.dataTransfer.files?.[0]); });
   $('#clearImg')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    Object.assign(p, state());
     p.image = ''; editorState.pendingImage = null;
     viewEditor(host);
   });
@@ -938,19 +1037,46 @@ function viewEditor(host) {
       // Upload the photo first when a new file was chosen; if the upload can't
       // run, the data URL is sent along and the server stores it instead.
       if (editorState.pendingImage) {
-        status.textContent = 'Uploading photo…';
-        try {
-          const file = editorState.pendingImage;
-          const dataUrl = await new Promise((resolve, reject) => {
+        status.textContent = CLOUDINARY ? 'Uploading photo to Cloudinary…' : 'Uploading photo…';
+        if (CLOUDINARY) {
+          const up = await cloudinaryUpload(editorState.pendingImage);
+          if (up && up.url) draft.image = up.url;
+        } else if (CLOUD) {
+          throw new Error('Add your Cloudinary Cloud Name & Upload Preset in js/cloud-config.js to upload photos in Cloud Mode.');
+        } else {
+          try {
+            const file = editorState.pendingImage;
+            const dataUrl = await new Promise((resolve, reject) => {
+              const r = new FileReader();
+              r.onload = () => resolve(String(r.result));
+              r.onerror = reject;
+              r.readAsDataURL(file);
+            });
+            const up = await api('/upload', {method: 'POST', body: {data: dataUrl}});
+            if (up && up.url) draft.image = up.url;
+          } catch (err) {
+            status.textContent = 'Photo will be stored on save…';
+          }
+        }
+      }
+
+      if (editorState.pendingVideo) {
+        status.textContent = CLOUDINARY ? 'Uploading video to Cloudinary…' : 'Uploading video…';
+        if (CLOUDINARY) {
+          const vUp = await cloudinaryUpload(editorState.pendingVideo);
+          if (vUp && vUp.url) draft.video = vUp.url;
+        } else if (CLOUD) {
+          throw new Error('Add your Cloudinary Cloud Name & Upload Preset in js/cloud-config.js to upload videos in Cloud Mode.');
+        } else {
+          const vfile = editorState.pendingVideo;
+          const vDataUrl = await new Promise((resolve, reject) => {
             const r = new FileReader();
             r.onload = () => resolve(String(r.result));
             r.onerror = reject;
-            r.readAsDataURL(file);
+            r.readAsDataURL(vfile);
           });
-          const up = await api('/upload', {method: 'POST', body: {data: dataUrl}});
-          if (up && up.url) draft.image = up.url;
-        } catch (err) {
-          status.textContent = 'Photo will be stored on save…';
+          const vUp = await api('/upload', {method: 'POST', body: {data: vDataUrl}});
+          if (vUp && vUp.url) draft.video = vUp.url;
         }
       }
 
@@ -960,6 +1086,7 @@ function viewEditor(host) {
 
       await saveStore(idx >= 0 ? 'Changes saved — the shop is updated.' : 'Product published to the shop.');
       editorState.pendingImage = null;
+      editorState.pendingVideo = null;
       editing = structuredClone(store.products.find((x) => x.n === draft.n && x.p === draft.p) || draft);
       go('products');
     } catch (err) {
@@ -1195,7 +1322,7 @@ function viewAppearance(host) {
 async function viewOrders(host) {
   host.innerHTML = `<div class="card"><div class="card-body"><p class="status">Loading orders…</p></div></div>`;
   try {
-    const data = await api('/orders');
+    const data = CLOUD ? await cloudListOrders() : await api('/orders');
     store.orders = Array.isArray(data.orders) ? data.orders : [];
   } catch (err) {
     host.innerHTML = `<div class="card"><div class="empty"><span class="mark" aria-hidden="true">⚑</span>
@@ -1245,7 +1372,8 @@ async function viewOrders(host) {
     const o = store.orders[Number(sel.dataset.status)];
     sel.disabled = true;
     try {
-      await api('/orders', {method: 'PATCH', body: {key: o.key, status: sel.value}});
+      if (CLOUD) await cloudUpdateOrderStatus(o.key || o.id, sel.value);
+      else await api('/orders', {method: 'PATCH', body: {key: o.key, status: sel.value}});
       o.status = sel.value;
       toast('Order updated.', 'ok');
       renderNav();
@@ -1275,9 +1403,18 @@ async function boot() {
     await loadStore();
     renderNav();
     renderView();
-    if (store.notice) toast(store.notice, 'err');
+    if (store.notice) toast(store.notice, store.needsInitialPublish ? '' : 'err');
   } catch (err) {
-    if (err.message === 'Sign in again to continue.') return;
+    if (err.status === 401) {
+      if (!$('#loginForm')) {
+        clearToken();
+        showLogin(err.message || 'Your session has ended. Please sign in again.');
+      }
+      return;
+    }
+    store.reachable = false;
+    store.notice = err.message || 'Could not load your studio.';
+    renderNav();
     renderView();
   }
 }

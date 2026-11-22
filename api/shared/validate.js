@@ -1,5 +1,5 @@
 // Shape and clean everything the admin sends before it is stored.
-// Shared by the Azure Functions and the local dev server (server.js),
+// Shared by the serverless API and the local dev server (server.js),
 // so both enforce exactly the same rules.
 
 const DEFAULT_SETTINGS = {
@@ -50,23 +50,46 @@ const num = (v, min, max, fallback) => {
 };
 const hex = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v || '').trim()) ? String(v).trim() : fallback);
 
-// Only allow image URLs this site actually produces — never javascript: or
-// arbitrary third-party hosts. Data URLs are accepted because the admin can
-// upload before the product is saved; the API swaps them for hosted URLs.
-const IMAGE_PATTERNS = [
-  /^\/images\/[\w.-]+$/,
-  /^\/api\/image\/[\w.-]+$/,
-  /^https:\/\/[a-z0-9]+\.blob\.core\.windows\.net\/[\w./-]+$/
+// Allow local site paths and trusted HTTPS image/video hosts (Cloudinary,
+// Supabase Storage, ImageKit, Cloudflare R2, Azure Blob, or direct HTTPS media).
+// Never allow javascript:, vbscript:, or malformed URLs.
+const LOCAL_MEDIA_PATTERNS = [
+  /^\/?images\/[\w./-]+$/,
+  /^\/?uploads\/[\w./-]+$/,
+  /^\/api\/image\/[\w.-]+$/
 ];
+
+function isSafeHttpsUrl(s) {
+  try {
+    const u = new URL(s);
+    return u.protocol === 'https:' && !!u.hostname && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
 function cleanImage(v) {
-  const s = String(v ?? '');
+  const s = String(v ?? '').trim();
+  if (!s) return '';
   // A base64 photo the panel could not upload yet: let it through here so the
   // catalogue route can store it properly instead of silently dropping it.
   if (/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(s)) {
     return s.length > 6 * 1024 * 1024 ? '' : s;
   }
-  const trimmed = str(s, 300);
-  return IMAGE_PATTERNS.some((re) => re.test(trimmed)) ? trimmed : '';
+  const trimmed = str(s, 500);
+  if (LOCAL_MEDIA_PATTERNS.some((re) => re.test(trimmed))) {
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  }
+  return isSafeHttpsUrl(trimmed) ? trimmed : '';
+}
+
+function cleanVideo(v) {
+  const s = str(v, 500);
+  if (!s) return '';
+  if (LOCAL_MEDIA_PATTERNS.some((re) => re.test(s))) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
+  return isSafeHttpsUrl(s) ? s : '';
 }
 
 function cleanProduct(raw, index) {
@@ -87,7 +110,7 @@ function cleanProduct(raw, index) {
     ? [...new Set(raw.ribbons.map(Number).filter((r) => Number.isInteger(r) && r >= 0 && r < MAX_RIBBONS))].sort()
     : [0, 1, 2, 3];
 
-  return {
+  const out = {
     // 0 / missing means "new": cleanProducts hands out the next free id.
     id: int(raw.id, 0, Number.MAX_SAFE_INTEGER, 0),
     n,
@@ -109,6 +132,9 @@ function cleanProduct(raw, index) {
     imageZoom: num(raw.imageZoom, 100, 300, 100),
     ribbons
   };
+  const video = cleanVideo(raw.video);
+  if (video) out.video = video;
+  return out;
 }
 
 function cleanProducts(list) {
@@ -232,5 +258,6 @@ module.exports = {
   cleanProducts,
   cleanSettings,
   cleanOrder,
-  cleanImage
+  cleanImage,
+  cleanVideo
 };

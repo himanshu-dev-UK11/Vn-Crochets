@@ -1183,3 +1183,53 @@ dialog::backdrop{
   font-weight:700;
 }
 .announce[hidden]{display:none}
+
+/* ── Resilient image fallbacks, zoom composition & product videos ── */
+.hero-fallback{
+  position:absolute;inset:0;
+  display:none;place-items:center;
+  font-size:clamp(64px,12vw,108px);
+}
+.hero-frame.is-fallback .hero-fallback{display:grid}
+
+.art-box .card-emoji{display:none}
+.art-box.is-fallback .card-emoji{display:grid}
+
+.card-swatch img{transform:scale(var(--zoom,1))}
+.card:hover .card-swatch img{transform:scale(calc(var(--zoom,1) * 1.045))}
+.pd-art img{transform:scale(var(--zoom,1))}
+
+.card-vid{
+  position:absolute;z-index:3;bottom:11px;left:11px;
+  padding:4px 10px;border-radius:var(--r-pill);
+  background:rgba(58,42,46,.84);color:var(--paper);
+  font-size:11px;font-weight:700;letter-spacing:.02em;
+  backdrop-filter:blur(4px);
+}
+
+.pd-art-video{
+  display:grid;place-items:center;
+  background:#1f1618;
+}
+.pd-art-video video{
+  width:100%;height:100%;
+  object-fit:contain;
+  display:block;
+}
+.pd-media-tabs{
+  position:absolute;z-index:6;left:14px;bottom:14px;
+  display:inline-flex;gap:4px;padding:4px;
+  border-radius:var(--r-pill);
+  background:rgba(255,252,247,.94);
+  border:1px solid var(--line);
+  box-shadow:0 6px 18px -6px rgba(40,27,30,.28);
+}
+.pd-media-tabs button{
+  border:0;background:transparent;color:var(--mute);
+  padding:6px 13px;border-radius:var(--r-pill);
+  font-size:12.5px;font-weight:700;cursor:pointer;
+  transition:background var(--t) var(--ease),color var(--t) var(--ease);
+}
+.pd-media-tabs button[aria-pressed="true"]{
+  background:var(--ink);color:var(--paper);
+}

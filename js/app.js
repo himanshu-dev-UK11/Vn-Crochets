@@ -13,15 +13,17 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
 function artwork(product, className = '', inner = '') {
   if (!product) return `<div class="${className}"></div>`;
   const bg = /^#[0-9a-f]{3,8}$/i.test(product.bg || '') ? product.bg : 'var(--linen)';
+  const fallbackEmoji = `<span class="card-emoji" aria-hidden="true">${esc(product.e || '🧶')}</span>`;
   if (product.image) {
-    const x = product.imageX ?? 50, y = product.imageY ?? 50, z = product.imageZoom || 100;
+    const x = product.imageX ?? 50, y = product.imageY ?? 50, z = (product.imageZoom || 100) / 100;
     const img = `<img src="${esc(product.image)}" alt="${esc(product.n)}" loading="lazy" decoding="async"
-        style="object-position:${x}% ${y}%;transform-origin:${x}% ${y}%;transform:scale(${z / 100})">`;
-    return `<div class="${className}" style="background-color:${bg}">${img}${inner}</div>`;
+        style="object-position:${x}% ${y}%;transform-origin:${x}% ${y}%;--zoom:${z}"
+        onerror="this.closest('.art-box')?.classList.add('tex','is-fallback');this.remove();">`;
+    return `<div class="${className} art-box" style="background-color:${bg}">${img}${fallbackEmoji}${inner}</div>`;
   }
   // No photograph: fall back to the emoji on a textured yarn-colour field.
-  return `<div class="${className} tex" style="background-color:${bg}">
-    <span class="card-emoji">${esc(product.e || '🧶')}</span>${inner}</div>`;
+  return `<div class="${className} art-box tex is-fallback" style="background-color:${bg}">
+    ${fallbackEmoji}${inner}</div>`;
 }
 
 function stockNote(product) {
@@ -47,17 +49,13 @@ function toast(message) {
 
 /* ── Dialog plumbing (native <dialog> handles focus + Esc) ─── */
 
-/* Re-render a panel without losing the reader's place: keep the scroll
-   position of its scrolling area and put focus back on the same control
-   (matched by its data attributes) so ribbon, quantity and cart buttons
-   don't jump the view to the top or drop keyboard focus. */
 function repaint(panel, html, scrollSel) {
   const box = panel.querySelector(scrollSel);
   const top = box ? box.scrollTop : 0;
   const active = document.activeElement;
   let key = null;
   if (active && panel.contains(active)) {
-    const attrs = ['data-ribbon', 'data-step', 'data-i', 'data-d'].filter((n) => active.hasAttribute(n));
+    const attrs = ['data-ribbon', 'data-step', 'data-i', 'data-d', 'data-media'].filter((n) => active.hasAttribute(n));
     if (attrs.length) key = attrs.map((n) => `[${n}="${active.getAttribute(n)}"]`).join('');
   }
   panel.innerHTML = html;
@@ -80,6 +78,8 @@ function closeDialog(dialog) {
 ['#pd', '#cart'].forEach((sel) => {
   const dialog = $(sel);
   dialog.addEventListener('close', () => {
+    // Pause any playing product video when the modal closes.
+    dialog.querySelectorAll('video').forEach((v) => v.pause());
     if (!$('#pd').open && !$('#cart').open) {
       document.documentElement.classList.remove('is-locked');
     }
@@ -136,7 +136,13 @@ function renderGrid() {
     grid.innerHTML = list.map((p, i) => `
       <button class="card" type="button" style="--i:${i}" data-id="${esc(p.id)}"
               aria-label="View ${esc(p.n)}, ${money(p.p)}">
-        ${artwork(p, 'card-swatch', (p.c ? `<span class="card-tag">${esc(p.c)}</span>` : '') + stockNote(p))}
+        ${artwork(
+          p,
+          'card-swatch',
+          (p.c ? `<span class="card-tag">${esc(p.c)}</span>` : '') +
+          stockNote(p) +
+          (p.video ? `<span class="card-vid" aria-label="Includes video">▶ Video</span>` : '')
+        )}
         <div class="card-body">
           <h3 class="card-name">${esc(p.n)}</h3>
           <p class="card-meta">${esc(p.s || 'Made in a small batch')}</p>
@@ -158,7 +164,6 @@ function renderGrid() {
     : '';
 }
 
-
 /* ── Product detail ────────────────────────────────────────── */
 
 function openProduct(id) {
@@ -168,6 +173,7 @@ function openProduct(id) {
   const offered = ribbonsFor(product);
   let ribbon = offered[0] ?? -1;
   let qty = 1;
+  let mediaMode = 'photo';
 
   const draw = () => {
     const specs = [];
@@ -178,9 +184,22 @@ function openProduct(id) {
       ? `${stock} ready to post`
       : 'Made to order, 1–2 weeks']);
 
+    const mediaToggle = product.video ? `
+      <div class="pd-media-tabs" role="group" aria-label="Switch between photo and video">
+        <button type="button" data-media="photo" aria-pressed="${mediaMode === 'photo'}">Photo</button>
+        <button type="button" data-media="video" aria-pressed="${mediaMode === 'video'}">▶ Video</button>
+      </div>` : '';
+
+    const artMarkup = mediaMode === 'video' && product.video
+      ? `<div class="pd-art pd-art-video">
+           <video src="${esc(product.video)}" controls autoplay muted loop playsinline></video>
+           ${mediaToggle}
+         </div>`
+      : artwork(product, 'pd-art', mediaToggle);
+
     repaint($('#pdPanel'), `
       <button class="x" type="button" data-close aria-label="Close details">✕</button>
-      ${artwork(product, 'pd-art')}
+      ${artMarkup}
       <div class="pd-side">
         <div class="pd-scroll">
           ${product.c ? `<span class="pd-kind">${esc(product.c)}</span>` : ''}
@@ -225,6 +244,7 @@ function openProduct(id) {
     const hit = e.target.closest('button');
     if (!hit) return;
     if (hit.hasAttribute('data-close')) return closeDialog($('#pd'));
+    if (hit.dataset.media) { mediaMode = hit.dataset.media; return draw(); }
     if (hit.dataset.ribbon !== undefined) { ribbon = Number(hit.dataset.ribbon); return draw(); }
     if (hit.dataset.step) { qty = Math.max(1, Math.min(cap, qty + Number(hit.dataset.step))); return draw(); }
     if (hit.hasAttribute('data-add')) {
@@ -440,30 +460,54 @@ if (sections.length && 'IntersectionObserver' in window) {
 
 /* ── Boot ──────────────────────────────────────────────────── */
 
-// Push the admin's shop settings into the page. Runs once with cached
-// settings (no flash for returning visitors) and again with live ones.
+function wireHeroFallback() {
+  const img = $('#heroImg');
+  const frame = img?.closest('.hero-frame');
+  if (!img || !frame) return;
+  img.addEventListener('error', () => {
+    frame.classList.add('tex', 'is-fallback');
+    img.hidden = true;
+  });
+  img.addEventListener('load', () => {
+    frame.classList.remove('tex', 'is-fallback');
+    img.hidden = false;
+  });
+}
+
 function renderSettings() {
   const S = SETTINGS;
   const setText = (sel, value) => { const el = $(sel); if (el && value) el.textContent = value; };
   setText('#heroTitle', S.heroTitle);
   setText('#heroText', S.heroText);
   const img = $('#heroImg');
-  if (img && S.heroImage && img.getAttribute('src') !== S.heroImage) img.src = S.heroImage;
+  if (img && S.heroImage && img.getAttribute('src') !== S.heroImage) {
+    img.hidden = false;
+    img.src = S.heroImage;
+  }
   const cap = $('#heroCap');
-  // Only touch the caption once real settings exist: an empty caption then
-  // means the admin removed it, not that nothing has loaded yet.
   if (cap && settingsLoaded) {
     cap.hidden = !S.heroCaption;
     if (S.heroCaption) cap.lastElementChild.textContent = S.heroCaption;
   }
   if (S.ticker.length) {
     const once = S.ticker.map((t) => `<span>${esc(t)}</span>`).join('');
-    $('#tickerTrack').innerHTML = once + once; // doubled for a seamless loop
+    $('#tickerTrack').innerHTML = once + once;
   }
   document.querySelectorAll('[data-ship]').forEach((el) => { el.textContent = money(S.freeShippingFrom); });
   document.querySelectorAll('a[href^="https://wa.me/"]').forEach((a) => { a.href = waLink(); });
 
-  // Brand name, announcement strip and accent colour are all admin-editable.
+  // Instagram link in footer if configured in admin settings.
+  const igLink = $('#igLink');
+  if (igLink) {
+    const handle = String(S.instagram || '').replace(/^@+/, '').trim();
+    if (handle) {
+      igLink.href = handle.startsWith('http') ? handle : `https://instagram.com/${encodeURIComponent(handle)}`;
+      igLink.hidden = false;
+    } else {
+      igLink.hidden = true;
+    }
+  }
+
   document.querySelectorAll('[data-brand]').forEach((el) => { if (S.brandName) el.textContent = S.brandName; });
   if (S.brandName) {
     document.title = `${S.brandName} — Handmade crochet plushies, botanicals & charms`;
@@ -479,6 +523,7 @@ function renderSettings() {
   }
 }
 
+wireHeroFallback();
 $('#yr').textContent = new Date().getFullYear();
 $('#search').value = state.query || '';
 $('#searchWrap').classList.toggle('has-value', !!state.query);
