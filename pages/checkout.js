@@ -22,7 +22,7 @@ function syncBrandAndTheme() {
   if (SETTINGS.accent && /^#[0-9a-f]{6}$/i.test(SETTINGS.accent)) {
     document.documentElement.style.setProperty('--rose', SETTINGS.accent);
   }
-  document.querySelectorAll('a[href^="https://wa.me/"]').forEach((a) => { a.href = waLink(); });
+  document.querySelectorAll('a[data-wa-link]').forEach((a) => { a.href = waLink(); });
 }
 
 /* ── Summary ───────────────────────────────────────────────── */
@@ -109,7 +109,7 @@ function clearErrors() {
 
 /* ── WhatsApp hand-off ─────────────────────────────────────── */
 
-function waUrl({name, email, phone, city, notes, ref}) {
+function waMessage({name, email, phone, city, notes, ref}) {
   const {sum, shipping, grand} = currentTotals();
   const brand = SETTINGS.brandName || 'VN crochet';
   const lines = [`New order — ${brand}`, ''];
@@ -121,7 +121,7 @@ function waUrl({name, email, phone, city, notes, ref}) {
   });
   lines.push('', `Subtotal: ${money(sum)}`, `Shipping: ${shipping === 0 ? 'Free' : money(shipping)}`, `Total: ${money(grand)}`);
   if (notes) lines.push('', `Notes: ${notes}`);
-  return waLink(lines.join('\n'));
+  return lines.join('\n');
 }
 
 /* ── Submit ────────────────────────────────────────────────── */
@@ -190,7 +190,8 @@ form.addEventListener('submit', async (event) => {
     // Still hand the order over on WhatsApp so no customer order is ever lost.
   }
 
-  const url = waUrl({name, email, phone, city, notes, ref});
+  const message = waMessage({name, email, phone, city, notes, ref});
+  const url = waLink(message);
 
   state.cart = [];
   saveState(state);
@@ -199,8 +200,31 @@ form.addEventListener('submit', async (event) => {
     <span>Thanks, <strong>${esc(name)}</strong>. Your order for <strong>${money(orderTotal)}</strong> is in.
     ${ref ? `Reference <strong>${esc(ref)}</strong>.` : ''}</span>
     <span>Send the message below so we can confirm delivery and payment.</span>
-    <a class="btn" href="${url}" target="_blank" rel="noopener" style="margin-top:6px">Confirm on WhatsApp</a>`;
+    <a class="btn" href="${esc(url)}" target="_blank" rel="noopener" style="margin-top:6px">Confirm on WhatsApp</a>
+    <button class="btn btn-ghost" type="button" id="copyOrderMsg" style="margin-top:4px">Copy order message</button>`;
   status.classList.add('ok');
+
+  const copyBtn = status.querySelector('#copyOrderMsg');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(message);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy order message'; }, 2000);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = message;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy order message'; }, 2000);
+      }
+    });
+  }
 
   form.reset();
   render();

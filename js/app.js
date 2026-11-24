@@ -437,7 +437,7 @@ $('#req').addEventListener('submit', (e) => {
 
   const status = $('#reqStatus');
   status.innerHTML = `Thanks, ${esc(name)} — your brief is ready to send.
-    <a class="btn" href="${url}" target="_blank" rel="noopener" style="margin-top:12px">Send it on WhatsApp</a>`;
+    <a class="btn" href="${esc(url)}" target="_blank" rel="noopener" style="margin-top:12px">Send it on WhatsApp</a>`;
   status.hidden = false;
   toast('Brief ready to send');
   form.reset();
@@ -494,7 +494,7 @@ function renderSettings() {
     $('#tickerTrack').innerHTML = once + once;
   }
   document.querySelectorAll('[data-ship]').forEach((el) => { el.textContent = money(S.freeShippingFrom); });
-  document.querySelectorAll('a[href^="https://wa.me/"]').forEach((a) => { a.href = waLink(); });
+  document.querySelectorAll('a[data-wa-link]').forEach((a) => { a.href = waLink(); });
 
   // Instagram link in footer if configured in admin settings.
   const igLink = $('#igLink');

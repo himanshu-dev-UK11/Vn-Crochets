@@ -1357,7 +1357,7 @@ async function viewOrders(host) {
           <select class="sel-status" data-status="${i}" aria-label="Order status">
             ${statuses.map((st) => `<option value="${st}"${st === o.status ? ' selected' : ''}>${titleCase(st)}</option>`).join('')}
           </select>
-          <a class="ghost small" href="https://wa.me/${esc(String(o.phone).replace(/\D/g, ''))}" target="_blank" rel="noopener">Message on WhatsApp</a>
+          <a class="ghost small" href="https://wa.me/${esc((() => { const d = String(o.phone || '').replace(/\D/g, '').replace(/^0+/, ''); return d.length === 10 ? '91' + d : d; })())}" target="_blank" rel="noopener">Message on WhatsApp</a>
         </div>
       </div>
     </div>`).join('');
