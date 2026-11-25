@@ -1346,7 +1346,7 @@ async function viewOrders(host) {
     <div class="order" data-order="${i}">
       <div class="order-top">
         <span class="badge ${o.status === 'new' ? 'new' : o.status === 'cancelled' ? 'out' : 'live'}">${esc(titleCase(o.status))}</span>
-        <div class="who"><b>${esc(o.name)}</b><div>${esc(o.phone)}${o.city ? ` · ${esc(o.city)}` : ''} · ${new Date(o.createdAt).toLocaleString('en-IN')}</div></div>
+        <div class="who"><b>${esc(o.name)}${o.payment_status ? ` <span class="badge ${o.payment_status === 'paid' ? 'live' : o.payment_status === 'failed' ? 'out' : 'new'}" style="margin-left:6px">${esc(o.payment_status.toUpperCase())}</span>` : ''}</b><div>${esc(o.phone)}${o.city ? ` · ${esc(o.city)}` : ''} · ${new Date(o.createdAt).toLocaleString('en-IN')}${o.razorpay_payment_id ? ` · Razorpay: ${esc(o.razorpay_payment_id)}` : ''}</div></div>
         <span class="order-total">${money(o.total, s.currency)}</span>
       </div>
       <div class="order-body" hidden>
@@ -1357,7 +1357,7 @@ async function viewOrders(host) {
           <select class="sel-status" data-status="${i}" aria-label="Order status">
             ${statuses.map((st) => `<option value="${st}"${st === o.status ? ' selected' : ''}>${titleCase(st)}</option>`).join('')}
           </select>
-          <a class="ghost small" href="https://wa.me/${esc(String(o.phone).replace(/\D/g, ''))}" target="_blank" rel="noopener">Message on WhatsApp</a>
+          <a class="ghost small" href="https://wa.me/${esc((() => { const d = String(o.phone || '').replace(/\D/g, '').replace(/^0+/, ''); return d.length === 10 ? '91' + d : d; })())}" target="_blank" rel="noopener">Message on WhatsApp</a>
         </div>
       </div>
     </div>`).join('');
