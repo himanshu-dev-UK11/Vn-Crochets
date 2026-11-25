@@ -147,8 +147,10 @@ export async function initCatalog() {
   });
 }
 
-export const waLink = (text) =>
-  `https://wa.me/${SETTINGS.whatsapp}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+export const waLink = (text) => {
+  const phone = String(SETTINGS.whatsapp || '').replace(/\D/g, '');
+  return `https://wa.me/${phone}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+};
 
 export function ribbonsFor(product) {
   if (!Array.isArray(product?.ribbons)) return RIBBON_NAMES.map((_, i) => i);

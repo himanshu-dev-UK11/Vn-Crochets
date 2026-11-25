@@ -407,7 +407,8 @@ function renderNav() {
     navButton('overview', '◈', 'Overview'),
     navButton('products', '▦', 'Products', store.products.length),
     navButton('appearance', '✿', 'Shop appearance'),
-    navButton('orders', '⚑', 'Orders', store.orders.filter((o) => o.status === 'new').length)
+    navButton('orders', '⚑', 'Orders', store.orders.filter((o) => o.status === 'new').length),
+    navButton('payments', '₹', 'Payments', store.orders.filter((o) => o.payment_status === 'paid').length)
   ].join('');
   $$('[data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
 
@@ -484,7 +485,8 @@ const VIEW_TITLES = {
   products: ['Products', 'Everything on your shelf'],
   editor: ['Product editor', 'Changes save straight to the live shop'],
   appearance: ['Shop appearance', 'Hero, colours and delivery — no code needed'],
-  orders: ['Orders', 'Everything customers have sent']
+  orders: ['Orders', 'Everything customers have sent'],
+  payments: ['Payments', 'Verified Razorpay transactions and gateway health']
 };
 
 function go(next) {
@@ -517,7 +519,7 @@ function renderView() {
     });
     return;
   }
-  ({overview: viewOverview, products: viewProducts, editor: viewEditor, appearance: viewAppearance, orders: viewOrders}[view] || viewOverview)(host);
+  ({overview: viewOverview, products: viewProducts, editor: viewEditor, appearance: viewAppearance, orders: viewOrders, payments: viewPayments}[view] || viewOverview)(host);
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────────
@@ -1346,7 +1348,7 @@ async function viewOrders(host) {
     <div class="order" data-order="${i}">
       <div class="order-top">
         <span class="badge ${o.status === 'new' ? 'new' : o.status === 'cancelled' ? 'out' : 'live'}">${esc(titleCase(o.status))}</span>
-        <div class="who"><b>${esc(o.name)}</b><div>${esc(o.phone)}${o.city ? ` · ${esc(o.city)}` : ''} · ${new Date(o.createdAt).toLocaleString('en-IN')}</div></div>
+        <div class="who"><b>${esc(o.name)}${o.payment_status ? ` <span class="badge ${o.payment_status === 'paid' ? 'live' : o.payment_status === 'failed' ? 'out' : 'new'}" style="margin-left:6px">${esc(o.payment_status.toUpperCase())}</span>` : ''}</b><div>${esc(o.phone)}${o.city ? ` · ${esc(o.city)}` : ''} · ${new Date(o.createdAt).toLocaleString('en-IN')}${o.razorpay_payment_id ? ` · Razorpay: ${esc(o.razorpay_payment_id)}` : ''}</div></div>
         <span class="order-total">${money(o.total, s.currency)}</span>
       </div>
       <div class="order-body" hidden>
@@ -1357,7 +1359,7 @@ async function viewOrders(host) {
           <select class="sel-status" data-status="${i}" aria-label="Order status">
             ${statuses.map((st) => `<option value="${st}"${st === o.status ? ' selected' : ''}>${titleCase(st)}</option>`).join('')}
           </select>
-          <a class="ghost small" href="https://wa.me/${esc(String(o.phone).replace(/\D/g, ''))}" target="_blank" rel="noopener">Message on WhatsApp</a>
+          <a class="ghost small" href="https://wa.me/${esc((() => { const d = String(o.phone || '').replace(/\D/g, '').replace(/^0+/, ''); return d.length === 10 ? '91' + d : d; })())}" target="_blank" rel="noopener">Message on WhatsApp</a>
         </div>
       </div>
     </div>`).join('');
@@ -1420,3 +1422,151 @@ async function boot() {
 }
 
 boot();
+
+
+// ── Payments (Razorpay Ledger & Security Health) ────────────────────────────
+async function viewPayments(host) {
+  const s = settings();
+  host.innerHTML = `<div class="card"><div class="card-body"><p class="section-note">Loading verified Razorpay payments…</p></div></div>`;
+
+  let health = null;
+  try {
+    const [ordRes, healthRes] = await Promise.all([
+      CLOUD ? cloudListOrders().catch(() => ({orders: store.orders || []})) : Promise.resolve({orders: store.orders || []}),
+      fetch('/api/payment-status', {cache: 'no-store'}).then((r) => r.ok ? r.json() : null).catch(() => null)
+    ]);
+    if (ordRes && Array.isArray(ordRes.orders)) store.orders = ordRes.orders;
+    health = healthRes;
+  } catch { /* fallback to current store.orders */ }
+
+  const all = store.orders || [];
+  const paid = all.filter((o) => o.payment_status === 'paid');
+  const pending = all.filter((o) => !o.payment_status || o.payment_status === 'pending');
+  const failed = all.filter((o) => o.payment_status === 'failed');
+  const paidRevenue = paid.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+
+  let activeFilter = 'all';
+  let searchQuery = '';
+
+  const modeBadge = !health
+    ? `<span class="badge new">Status unavailable</span>`
+    : health.mode === 'live'
+      ? `<span class="badge live">LIVE MODE</span>`
+      : health.mode === 'test'
+        ? `<span class="badge new">TEST MODE</span>`
+        : `<span class="badge out">NOT CONFIGURED</span>`;
+
+  host.innerHTML = `
+    <div class="stats" style="margin-bottom:18px">
+      <div class="stat"><span>Verified Paid Revenue</span><b>${money(paidRevenue, s.currency)}</b></div>
+      <div class="stat"><span>Paid Orders</span><b>${paid.length}</b></div>
+      <div class="stat"><span>Pending / Unpaid</span><b>${pending.length}</b></div>
+      <div class="stat"><span>Failed Payments</span><b>${failed.length}</b></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head">
+        <div class="grow">
+          <h2>Razorpay Gateway &amp; Security Status ${modeBadge}</h2>
+          <p>All payment amounts and HMAC-SHA256 signatures are verified server-side on Cloudflare Pages.</p>
+        </div>
+        <a class="ghost small" href="https://dashboard.razorpay.com/app/payments" target="_blank" rel="noopener">Open Razorpay Dashboard ↗</a>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13.5px">
+          <span class="badge ${health?.razorpayConfigured ? 'live' : 'out'}">${health?.razorpayConfigured ? '✓ Razorpay API Connected' : '✕ Razorpay Keys Missing'}</span>
+          <span class="badge ${health?.supabaseAdminConfigured ? 'live' : 'new'}">${health?.supabaseAdminConfigured ? '✓ Server Order Lock Active' : '⚠ Add SUPABASE_SERVICE_ROLE_KEY'}</span>
+          <span class="badge ${health?.webhookConfigured ? 'live' : 'new'}">${health?.webhookConfigured ? '✓ Webhook Secret Configured' : '⚠ Webhook Secret Optional (Required for Live)'}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="grow">
+          <h2>Payment Ledger</h2>
+          <p>Cross-check any WhatsApp receipt against the verified Razorpay Payment ID below before shipping.</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="paySearch" type="search" placeholder="Search Ref, Payment ID, or name…" style="max-width:230px;padding:7px 11px;border-radius:8px;border:1px solid var(--line);font:inherit;font-size:13.5px">
+          <div style="display:flex;gap:6px" id="payFilters">
+            <button type="button" class="ghost small" data-pf="all" aria-pressed="true">All (${all.length})</button>
+            <button type="button" class="ghost small" data-pf="paid" aria-pressed="false">Paid (${paid.length})</button>
+            <button type="button" class="ghost small" data-pf="pending" aria-pressed="false">Pending (${pending.length})</button>
+            <button type="button" class="ghost small" data-pf="failed" aria-pressed="false">Failed (${failed.length})</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-body tight" id="payList"></div>
+    </div>`;
+
+  function drawLedger() {
+    const q = searchQuery.trim().toLowerCase();
+    const rows = all.filter((o) => {
+      const st = o.payment_status || 'pending';
+      if (activeFilter !== 'all' && st !== activeFilter) return false;
+      if (!q) return true;
+      return `${o.id || ''} ${o.name || ''} ${o.phone || ''} ${o.razorpay_payment_id || ''} ${o.razorpay_order_id || ''}`.toLowerCase().includes(q);
+    });
+
+    const box = $('#payList');
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty"><span class="mark" aria-hidden="true">₹</span><h3>No matching transactions</h3><p>Completed Razorpay checkouts will appear here automatically.</p></div>`;
+      return;
+    }
+
+    box.innerHTML = rows.map((o) => {
+      const pst = o.payment_status || 'pending';
+      const cls = pst === 'paid' ? 'live' : pst === 'failed' ? 'out' : 'new';
+      const waDigits = (() => {
+        const d = String(o.phone || '').replace(/\D/g, '').replace(/^0+/, '');
+        return d.length === 10 ? '91' + d : d;
+      })();
+      return `
+        <div class="order">
+          <div class="order-top" style="cursor:default">
+            <span class="badge ${cls}">${esc(pst.toUpperCase())}</span>
+            <div class="who">
+              <b>${esc(o.id || '—')} · ${esc(o.name)}</b>
+              <div>${esc(o.phone)}${o.city ? ` · ${esc(o.city)}` : ''} · ${new Date(o.paid_at || o.createdAt || o.created_at).toLocaleString('en-IN')}</div>
+              <div style="margin-top:4px;font-size:12.5px;color:var(--mute)">
+                ${o.razorpay_payment_id ? `Payment ID: <code>${esc(o.razorpay_payment_id)}</code>` : 'No payment captured yet'}
+                ${o.razorpay_order_id ? ` · Order ID: <code>${esc(o.razorpay_order_id)}</code>` : ''}
+              </div>
+            </div>
+            <span class="order-total">${money(o.total, s.currency)}</span>
+          </div>
+          <div class="order-body" style="display:flex;gap:8px;flex-wrap:wrap;padding-top:10px">
+            ${o.razorpay_payment_id ? `<button type="button" class="ghost small" data-copy-pid="${esc(o.razorpay_payment_id)}">Copy Payment ID</button>` : ''}
+            ${o.razorpay_payment_id ? `<a class="ghost small" href="https://dashboard.razorpay.com/app/payments/${encodeURIComponent(o.razorpay_payment_id)}" target="_blank" rel="noopener">Verify on Razorpay ↗</a>` : ''}
+            ${waDigits ? `<a class="ghost small" href="https://wa.me/${esc(waDigits)}" target="_blank" rel="noopener">Message Customer</a>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    $$('[data-copy-pid]', box).forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.copyPid);
+          toast('Payment ID copied.', 'ok');
+        } catch {
+          toast(btn.dataset.copyPid, 'ok');
+        }
+      });
+    });
+  }
+
+  $('#paySearch')?.addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    drawLedger();
+  });
+  $$('#payFilters [data-pf]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      activeFilter = btn.dataset.pf;
+      $$('#payFilters [data-pf]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+      drawLedger();
+    });
+  });
+
+  drawLedger();
+}

@@ -1,7 +1,7 @@
 import {PRODUCTS, RIBBON_COLORS, RIBBON_NAMES, SETTINGS, CAT_ICONS, CATEGORIES, settingsLoaded, initCatalog, waLink, ribbonsFor} from './data.js';
-import {loadState, saveState, itemCount, subtotal, pruneCart} from './store.js';
+import {loadState, saveState, itemCount, subtotal, pruneCart, loadProfile, saveProfile, clearLastOrder} from './store.js';
 
-const state = loadState();
+let state = loadState();
 const $ = (sel) => document.querySelector(sel);
 const money = (n) => (SETTINGS.currency || '₹') + Math.round(n).toLocaleString('en-IN');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -257,8 +257,16 @@ function openProduct(id) {
 /* ── Cart ──────────────────────────────────────────────────── */
 
 function addToCart(id, qty, ribbon) {
+  const prod = PRODUCTS.find((x) => String(x.id) === String(id));
+  const snap = prod ? {n: prod.n, p: prod.p, s: prod.s || '', image: prod.image || '', bg: prod.bg || '', e: prod.e || ''} : undefined;
   const line = state.cart.find((l) => String(l.id) === String(id) && l.c === ribbon);
-  if (line) line.q += qty; else state.cart.push({id, q: qty, c: ribbon});
+  if (line) {
+    line.q += qty;
+    if (snap) line.snap = snap;
+  } else {
+    state.cart.push(snap ? {id, q: qty, c: ribbon, snap} : {id, q: qty, c: ribbon});
+  }
+  clearLastOrder();
   const btn = $('#openCart');
   btn.classList.remove('bump');
   void btn.offsetWidth;
@@ -276,7 +284,7 @@ function renderCart() {
   const shipping = state.cart.length ? (free ? 0 : SETTINGS.shippingFee) : 0;
 
   const rows = state.cart.map((line, i) => {
-    const p = PRODUCTS.find((x) => String(x.id) === String(line.id));
+    const p = PRODUCTS.find((x) => String(x.id) === String(line.id)) || line.snap;
     if (!p) return '';
     const cap = maxQty(p);
     return `
@@ -413,6 +421,32 @@ function clearErrors(form) {
 }
 const clean = (v, max = 400) => String(v || '').trim().replace(/[<>]/g, '').slice(0, max);
 
+function hydrateCustomForm() {
+  const prof = loadProfile();
+  if (prof.name && !$('#rn').value) $('#rn').value = prof.name;
+  const savedContact = prof.phone || prof.email;
+  if (savedContact && !$('#re').value) $('#re').value = savedContact;
+  if (prof.customBrief && !$('#rd').value) $('#rd').value = prof.customBrief;
+  if (prof.customSize && [...$('#rs').options].some((o) => o.value === prof.customSize)) {
+    $('#rs').value = prof.customSize;
+  }
+}
+['rn', 're', 'rd', 'rs'].forEach((id) => {
+  const el = $('#' + id);
+  if (!el) return;
+  el.addEventListener(id === 'rs' ? 'change' : 'input', () => {
+    const patch = {};
+    if (id === 'rn') patch.name = el.value.slice(0, 80);
+    else if (id === 're') {
+      const v = el.value.trim();
+      if (v.includes('@')) patch.email = v.slice(0, 120);
+      else patch.phone = v.slice(0, 20);
+    } else if (id === 'rd') patch.customBrief = el.value.slice(0, 600);
+    else if (id === 'rs') patch.customSize = el.value.slice(0, 80);
+    saveProfile(patch);
+  });
+});
+
 $('#req').addEventListener('submit', (e) => {
   e.preventDefault();
   const form = e.target;
@@ -437,10 +471,15 @@ $('#req').addEventListener('submit', (e) => {
 
   const status = $('#reqStatus');
   status.innerHTML = `Thanks, ${esc(name)} — your brief is ready to send.
-    <a class="btn" href="${url}" target="_blank" rel="noopener" style="margin-top:12px">Send it on WhatsApp</a>`;
+    <a class="btn" href="${esc(url)}" target="_blank" rel="noopener" style="margin-top:12px">Send it on WhatsApp</a>`;
   status.hidden = false;
+  saveProfile({
+    name,
+    ...(contact.includes('@') ? {email: contact} : {phone: contact}),
+    customBrief: ''
+  });
   toast('Brief ready to send');
-  form.reset();
+  $('#rd').value = '';
 });
 
 /* ── Nav highlight ─────────────────────────────────────────── */
@@ -494,7 +533,7 @@ function renderSettings() {
     $('#tickerTrack').innerHTML = once + once;
   }
   document.querySelectorAll('[data-ship]').forEach((el) => { el.textContent = money(S.freeShippingFrom); });
-  document.querySelectorAll('a[href^="https://wa.me/"]').forEach((a) => { a.href = waLink(); });
+  document.querySelectorAll('a[data-wa-link]').forEach((a) => { a.href = waLink(); });
 
   // Instagram link in footer if configured in admin settings.
   const igLink = $('#igLink');
@@ -523,11 +562,33 @@ function renderSettings() {
   }
 }
 
+function reloadPersistedState() {
+  state = loadState();
+  $('#cnt').textContent = itemCount(state);
+  $('#search').value = state.query || '';
+  $('#searchWrap').classList.toggle('has-value', !!state.query);
+  $('#sort').value = state.sort || 'feat';
+  if (PRODUCTS.length) {
+    renderCategories();
+    renderGrid();
+  }
+  renderCart();
+}
+
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) reloadPersistedState();
+});
+window.addEventListener('storage', (e) => {
+  if (e.key === 'vnc.v1') reloadPersistedState();
+});
+
 wireHeroFallback();
 $('#yr').textContent = new Date().getFullYear();
+$('#cnt').textContent = itemCount(state);
 $('#search').value = state.query || '';
 $('#searchWrap').classList.toggle('has-value', !!state.query);
 $('#sort').value = state.sort || 'feat';
+hydrateCustomForm();
 renderSettings();
 
 initCatalog().then(() => {
